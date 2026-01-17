@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geometry Dash Klon - Level Edition</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #0a0a14;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: 'Press Start 2P', cursive;
+            overflow: hidden;
+            color: white;
+            user-select: none;
+        }
+
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 50px rgba(0,0,0,0.7);
+            border: 4px solid #fff;
+        }
+
+        canvas {
+            display: block;
+            /* Vi sätter bakgrundsfärgen via JS nu för levels, men har en default här */
+            background: linear-gradient(to bottom, #2b32b2, #1488cc);
+            transition: background 1s ease; /* Mjuk övergång mellan levels */
+        }
+
+        /* UI Lager */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .hud-top {
+            display: flex;
+            justify-content: space-between;
+            padding: 20px;
+            font-size: 18px;
+            text-shadow: 2px 2px 0 #000;
+        }
+
+        #level-indicator {
+            color: #f7b731;
+        }
+
+        /* Level Up Text (Centrerad) */
+        #level-up-text {
+            position: absolute;
+            top: 40%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0); /* Börja osynlig/liten */
+            font-size: 40px;
+            color: #fff;
+            text-shadow: 4px 4px 0 #000;
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            text-align: center;
+            opacity: 0;
+        }
+
+        #level-up-text.active {
+            transform: translate(-50%, -50%) scale(1);
+            opacity: 1;
+        }
+
+        #start-screen, #game-over-screen {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.85);
+            padding: 30px;
+            text-align: center;
+            border-radius: 10px;
+            border: 2px solid #fff;
+            pointer-events: auto;
+            display: none;
+            width: 320px;
+            z-index: 10;
+        }
+
+        h1 {
+            font-size: 24px;
+            margin-bottom: 20px;
+            color: #f7b731;
+            text-shadow: 3px 3px #000;
+            line-height: 1.5;
+        }
+
+        p {
+            font-size: 12px;
+            line-height: 1.6;
+            margin-bottom: 25px;
+            color: #ddd;
+        }
+
+        button {
+            background: #f7b731;
+            border: none;
+            padding: 15px 25px;
+            font-family: 'Press Start 2P', cursive;
+            font-size: 16px;
+            color: #000;
+            cursor: pointer;
+            transition: transform 0.1s;
+            box-shadow: 4px 4px 0 #c98d0c;
+        }
+
+        button:active {
+            transform: translate(2px, 2px);
+            box-shadow: 2px 2px 0 #c98d0c;
+        }
+
+        button:hover {
+            background: #ffca4f;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas" width="800" height="450"></canvas>
+
+        <div id="ui-layer">
+            <div class="hud-top">
+                <div id="score-display">POÄNG: <span id="score">0</span></div>
+                <div id="level-indicator">LEVEL <span id="level">1</span></div>
+            </div>
+            <div id="level-up-text">LEVEL UP!</div>
+        </div>
+
+        <!-- Startskärm -->
+        <div id="start-screen" style="display: block;">
+            <h1>GEOMETRY<br>DASH</h1>
+            <p>Hoppa över spikarna!<br>Undvik svävande block.</p>
+            <p>Kontroller:<br>Mellanslag, Upp-pil eller Klick</p>
+            <button onclick="startGame()">STARTA SPELET</button>
+        </div>
+
+        <!-- Game Over Skärm -->
+        <div id="game-over-screen">
+            <h1 style="color: #ff4757;">KRASCHAD!</h1>
+            <p>Slutpoäng: <span id="final-score">0</span></p>
+            <p style="font-size: 10px; color: #aaa;">Du nådde Level <span id="final-level">1</span></p>
+            <button onclick="resetGame()">FÖRSÖK IGEN</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        // UI Element
+        const scoreEl = document.getElementById("score");
+        const levelEl = document.getElementById("level");
+        const finalScoreEl = document.getElementById("final-score");
+        const finalLevelEl = document.getElementById("final-level");
+        const startScreen = document.getElementById("start-screen");
+        const gameOverScreen = document.getElementById("game-over-screen");
+        const levelUpText = document.getElementById("level-up-text");
+
+        // Spelstatus
+        let gameRunning = false;
+        let score = 0;
+        let speed = 6.5; 
+        let frameCount = 0;
+        let currentLevel = 1;
+        let lastScoreCheck = 0; // För att inte trigga level up flera gånger
+
+        // Golvhöjd
+        const groundHeight = 80;
+        const groundY = canvas.height - groundHeight;
+
+        // Level-konfigurationer (Färger och teman)
+        const levels = [
+            { bg: "linear-gradient(to bottom, #2b32b2, #1488cc)", obstacleColor: "#ff3333", groundColor: "#0a0a14" }, // Lvl 1: Blue
+            { bg: "linear-gradient(to bottom, #800000, #cc0000)", obstacleColor: "#ffff00", groundColor: "#200000" }, // Lvl 2: Red
+            { bg: "linear-gradient(to bottom, #4b0082, #8a2be2)", obstacleColor: "#00ff00", groundColor: "#1a0033" }, // Lvl 3: Purple
+            { bg: "linear-gradient(to bottom, #004d00, #00cc00)", obstacleColor: "#ff00ff", groundColor: "#002200" }, // Lvl 4: Green
+            { bg: "linear-gradient(to bottom, #333333, #000000)", obstacleColor: "#ffffff", groundColor: "#111111" }  // Lvl 5: Dark
+        ];
+
+        // Spelaren (Kuben)
+        const player = {
+            x: 150,
+            y: groundY - 40,
+            size: 40,
+            dy: 0,
+            jumpForce: -14,
+            gravity: 0.9,
+            grounded: true,
+            angle: 0,
+            color: '#f7b731'
+        };
+
+        let obstacles = [];
+        let particles = [];
+
+        // ==========================================
+        // SPEL-LOOP
+        // ==========================================
+
+        function update() {
+            if (!gameRunning) {
+                if (particles.length > 0) {
+                    // Rita sista rutan med partiklar om man dör
+                    drawGround();
+                    drawObstacles();
+                    updateAndDrawParticles();
+                    requestAnimationFrame(update);
+                }
+                return;
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Puls-effekt på bakgrunden (bara lite transparant overlay)
+            if (frameCount % 60 < 30) {
+                ctx.fillStyle = "rgba(255, 255, 255, 0.02)";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+
+            updatePlayer();
+            drawPlayer();
+            handleObstacles();
+            drawGround();
+            checkLevelUp();
+
+            // Poängräkning
+            frameCount++;
+            if (frameCount % 10 === 0) {
+                score++;
+                scoreEl.innerText = score;
+            }
+
+            requestAnimationFrame(update);
+        }
+
+        // ==========================================
+        // LEVEL SYSTEM
+        // ==========================================
+
+        function checkLevelUp() {
+            // Level up var 50:e poäng (ca 8 sekunder)
+            let newLevel = Math.floor(score / 50) + 1;
+            
+            if (newLevel > currentLevel) {
+                currentLevel = newLevel;
+                levelUp();
+            }
+        }
+
+        function levelUp() {
+            levelEl.innerText = currentLevel;
+            
+            // Öka hastighet
+            speed += 1.2;
+
+            // Flash Level Up Text
+            levelUpText.innerText = "LEVEL " + currentLevel;
+            levelUpText.classList.add("active");
+            
+            // Byt färger
+            updateColors();
+
+            // Dölj text efter 2 sekunder
+            setTimeout(() => {
+                levelUpText.classList.remove("active");
+            }, 2000);
+        }
+
+        function updateColors() {
+            // Hämta config, använd modulo om vi går över antal definierade levels
+            const config = levels[(currentLevel - 1) % levels.length];
+            canvas.style.background = config.bg;
+        }
+
+        function getCurrentLevelConfig() {
+            return levels[(currentLevel - 1) % levels.length];
+        }
+
+
+        // ==========================================
+        // UPPDATERINGAR & LOGIK
+        // ==========================================
+
+        function updatePlayer() {
+            player.dy += player.gravity;
+            player.y += player.dy;
+
+            // Markkollision
+            if (player.y + player.size >= groundY) {
+                player.y = groundY - player.size;
+                player.dy = 0;
+                player.grounded = true;
+                player.angle = Math.round(player.angle / (Math.PI / 2)) * (Math.PI / 2);
+            } else {
+                player.grounded = false;
+                player.angle += 0.15; 
+            }
+        }
+
+        function handleObstacles() {
+            // Spawn timer: Minst 70 frames mellan hinder
+            // Ju högre level, desto oftare kan hinder komma
+            let minGap = Math.max(40, 90 - (currentLevel * 5));
+            
+            if (frameCount % minGap === 0 || (Math.random() < 0.03 && frameCount > 100)) {
+                const lastObstacle = obstacles[obstacles.length - 1];
+                // Säkerställ mellanrum
+                if (!lastObstacle || canvas.width - lastObstacle.x > 300) {
+                    createObstacle();
+                }
+            }
+
+            for (let i = 0; i < obstacles.length; i++) {
+                let obs = obstacles[i];
+                obs.x -= speed;
+
+                drawObstacleShape(obs);
+
+                if (checkCollision(player, obs)) {
+                    gameOver();
+                }
+
+                if (obs.x + obs.w < 0) {
+                    obstacles.splice(i, 1);
+                    i--;
+                }
+            }
+        }
+
+        function createObstacle() {
+            let type = Math.random();
+            let config = getCurrentLevelConfig();
+
+            // Level 1: Bara enkla spikar
+            // Level 2+: Dubbla spikar
+            // Level 3+: Flygande block
+            
+            if (currentLevel >= 3 && type > 0.7) {
+                // Flygande block (måste hoppa under eller över beroende på höjd?)
+                // Vi gör det enkelt: Svävande block man krockar med om man hoppar för tidigt/högt
+                // Eller block på marken
+                obstacles.push({ 
+                    x: canvas.width, 
+                    y: groundY - 70, // Svävar i luften
+                    w: 40, h: 40, 
+                    type: 'block' 
+                });
+            } else if (currentLevel >= 2 && type > 0.8) {
+                // Dubbel spik
+                obstacles.push({ x: canvas.width, y: groundY, w: 30, h: 30, type: 'spike' });
+                obstacles.push({ x: canvas.width + 30, y: groundY, w: 30, h: 30, type: 'spike' });
+            } else {
+                // Vanlig spik
+                obstacles.push({ x: canvas.width, y: groundY, w: 35, h: 35, type: 'spike' });
+            }
+        }
+
+        function checkCollision(p, obs) {
+            const padding = 6;
+            return (
+                p.x + padding < obs.x + obs.w &&
+                p.x + p.size - padding > obs.x &&
+                p.y + padding < obs.y && 
+                p.y + p.size - padding > obs.y - obs.h
+            );
+        }
+
+        // ==========================================
+        // RITNING
+        // ==========================================
+
+        function drawPlayer() {
+            ctx.save();
+            ctx.translate(player.x + player.size / 2, player.y + player.size / 2);
+            ctx.rotate(player.angle);
+            ctx.fillStyle = player.color;
+            ctx.fillRect(-player.size / 2, -player.size / 2, player.size, player.size);
+            ctx.strokeStyle = "black";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(-player.size / 2, -player.size / 2, player.size, player.size);
+            
+            // Ansikte
+            ctx.fillStyle = "black";
+            ctx.fillRect(4, -8, 8, 8); 
+            ctx.fillRect(8, 4, 12, 4); 
+            ctx.restore();
+        }
+
+        function drawObstacles() {
+            for (let obs of obstacles) {
+                drawObstacleShape(obs);
+            }
+        }
+
+        function drawObstacleShape(obs) {
+            let config = getCurrentLevelConfig();
+            ctx.fillStyle = config.obstacleColor;
+            ctx.strokeStyle = "black";
+            ctx.lineWidth = 2;
+
+            if (obs.type === 'block') {
+                // Rektangulärt hinder (flygande)
+                ctx.fillRect(obs.x, obs.y - obs.h, obs.w, obs.h); // Notera y - h för att rita uppåt
+                ctx.strokeRect(obs.x, obs.y - obs.h, obs.w, obs.h);
+                
+                // Detalj
+                ctx.fillStyle = "rgba(0,0,0,0.3)";
+                ctx.fillRect(obs.x + 5, obs.y - obs.h + 5, obs.w - 10, obs.h - 10);
+            } else {
+                // Spik (Triangel)
+                ctx.beginPath();
+                ctx.moveTo(obs.x, obs.y); 
+                ctx.lineTo(obs.x + obs.w / 2, obs.y - obs.h); 
+                ctx.lineTo(obs.x + obs.w, obs.y); 
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+            }
+        }
+
+        function drawGround() {
+            let config = getCurrentLevelConfig();
+            ctx.fillStyle = config.groundColor;
+            ctx.fillRect(0, groundY, canvas.width, groundHeight);
+
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(0, groundY);
+            ctx.lineTo(canvas.width, groundY);
+            ctx.stroke();
+
+            // Rutnätseffekt
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
+            ctx.lineWidth = 1;
+            const offset = (frameCount * speed) % 50;
+            for(let i = 0; i < canvas.width + 50; i += 50) {
+                ctx.beginPath();
+                ctx.moveTo(i - offset, groundY);
+                ctx.lineTo(i - offset - 30, canvas.height);
+                ctx.stroke();
+            }
+        }
+
+        // ==========================================
+        // PARTIKLAR
+        // ==========================================
+        function createExplosion(x, y) {
+            for (let i = 0; i < 25; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * 15,
+                    vy: (Math.random() - 0.5) * 15,
+                    life: 1.0,
+                    color: player.color
+                });
+            }
+        }
+
+        function updateAndDrawParticles() {
+            for (let i = 0; i < particles.length; i++) {
+                let p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= 0.03;
+
+                ctx.globalAlpha = p.life;
+                ctx.fillStyle = p.color;
+                ctx.fillRect(p.x, p.y, 8, 8);
+                ctx.globalAlpha = 1.0;
+
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                    i--;
+                }
+            }
+        }
+
+        // ==========================================
+        // KONTROLLER & LOGIK
+        // ==========================================
+
+        function jump() {
+            if (player.grounded && gameRunning) {
+                player.dy = player.jumpForce;
+                player.grounded = false;
+            }
+        }
+
+        function startGame() {
+            resetGameVariables();
+            startScreen.style.display = "none";
+            gameRunning = true;
+            updateColors(); // Sätt startfärg
+            update();
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            createExplosion(player.x + player.size/2, player.y + player.size/2);
+            
+            finalScoreEl.innerText = score;
+            finalLevelEl.innerText = currentLevel;
+            
+            setTimeout(() => {
+                gameOverScreen.style.display = "block";
+            }, 800);
+        }
+
+        function resetGame() {
+            gameOverScreen.style.display = "none";
+            resetGameVariables();
+            gameRunning = true;
+            updateColors();
+            update();
+        }
+
+        function resetGameVariables() {
+            player.y = groundY - player.size;
+            player.dy = 0;
+            player.angle = 0;
+            player.grounded = true;
+            
+            obstacles = [];
+            particles = [];
+            score = 0;
+            speed = 6.5;
+            frameCount = 0;
+            currentLevel = 1;
+            
+            scoreEl.innerText = "0";
+            levelEl.innerText = "1";
+            levelUpText.classList.remove("active");
+        }
+
+        window.addEventListener("keydown", (e) => {
+            if (e.code === "Space" || e.code === "ArrowUp") {
+                e.preventDefault(); 
+                if (gameRunning) jump();
+                else if (startScreen.style.display !== "none") startGame();
+                else if (gameOverScreen.style.display === "block") resetGame();
+            }
+        });
+
+        canvas.addEventListener("mousedown", (e) => {
+            if (gameRunning) jump();
+        });
+
+        canvas.addEventListener("touchstart", (e) => {
+            e.preventDefault();
+            if (gameRunning) jump();
+        }, { passive: false });
+
+    </script>
+</body>
+</html>
